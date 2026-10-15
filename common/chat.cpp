@@ -714,7 +714,7 @@ std::string common_chat_format_example(const struct common_chat_templates *     
 
 // Fallback for Muse Glimmer GGUFs that omit tokenizer.chat_template.
 // The ATEM marker is also used to select the existing Muse Glimmer PEG parser.
-#define MUSE_GLIMMER_TEMPLATE_SRC R"muse(\
+#define MUSE_GLIMMER_TEMPLATE_SRC R"muse(
 {# <atem:function_calls> <|eom|> #}
 {%- for message in messages -%}
 {{- '<|start|>' + message.role -}}
