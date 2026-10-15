@@ -712,6 +712,27 @@ std::string common_chat_format_example(const struct common_chat_templates *     
     return common_chat_templates_apply(tmpls, inputs).prompt;
 }
 
+// Fallback for Muse Glimmer GGUFs that omit tokenizer.chat_template.
+// The ATEM marker is also used to select the existing Muse Glimmer PEG parser.
+#define MUSE_GLIMMER_TEMPLATE_SRC R"muse(
+{# <atem:function_calls> <|eom|> #}
+{%- for message in messages -%}
+{{- '<|start|>' + message.role -}}
+{%- if message.role == 'assistant' -%}
+{{- ' to=user' -}}
+{%- endif -%}
+{{- '<|message|>' + message.content -}}
+{%- if message.role == 'assistant' -%}
+{{- '<|eot|>' -}}
+{%- else -%}
+{{- '<|eom|>' -}}
+{%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+{{- '<|start|>assistant' -}}
+{%- endif -%}
+)muse"
+
 #define CHATML_TEMPLATE_SRC                                                               \
     "{%- for message in messages -%}\n"                                                   \
     "  {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>\n' -}}\n" \
@@ -781,7 +802,16 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
         if (!template_tool_use_src.empty()) {
             default_template_src = template_tool_use_src;
         } else {
-            default_template_src = CHATML_TEMPLATE_SRC;
+            // Muse Glimmer uses native <|start|>/<|message|> framing, not ChatML.
+            // Only apply this fallback when no model/override template was supplied.
+            char arch[64] = {};
+            if (model && llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch)) >= 0 &&
+                std::string(arch) == "muse-glimmer") {
+                default_template_src = MUSE_GLIMMER_TEMPLATE_SRC;
+                LOG_INF("Using built-in Muse Glimmer chat template (GGUF template missing)\\n");
+            } else {
+                default_template_src = CHATML_TEMPLATE_SRC;
+            }
         }
     }
 

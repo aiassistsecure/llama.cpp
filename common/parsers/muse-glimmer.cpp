@@ -41,8 +41,6 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
         data.prompt += data.generation_prompt;
     }
 
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-
     auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
     auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
     // Constrained grammar whenever tools are offered or a response format is requested.
@@ -51,15 +49,10 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto start = p.rule("start", p.literal("<|start|>assistant"));
 
-        if (!extract_reasoning && !include_grammar) {
-            return start + p.content(p.rest());
-        }
-
-        if (extract_reasoning) {
-            p.rule("analysis", p.literal(" to=self<|message|>") + p.reasoning(p.until("<|eom|>")) + p.literal("<|eom|>"));
-        } else {
-            p.rule("analysis", p.literal(" to=self<|message|>") + p.content(p.until("<|eom|>")) + p.literal("<|eom|>"));
-        }
+        // Always parse native channels. Treating the entire response as content
+        // leaks to=self reasoning and protocol delimiters into the final answer.
+        // Keep reasoning out of user-facing content even when its extraction is off.
+        p.rule("analysis", p.literal(" to=self<|message|>") + p.reasoning(p.until("<|eom|>")) + p.literal("<|eom|>"));
         auto analysis = p.ref("analysis");
 
         auto recipient  = p.optional(p.literal(" to=user"));
