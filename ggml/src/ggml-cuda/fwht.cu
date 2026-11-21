@@ -34,7 +34,7 @@ __global__ void fwht_cuda(const T * src, float * dst, const int64_t n_rows, cons
 #pragma unroll
         for (int j = 0; j < el_w; j++) {
             const float val  = reg[j];
-            const float val2 = __shfl_xor_sync(0xFFFFFFFF, val, h, warp_size);
+            const float val2 = ggml_cuda_shfl_xor(val, h, warp_size);
 
             reg[j] = (lane & h) == 0 ? val + val2 : val2 - val;
         }
@@ -99,7 +99,7 @@ __global__ void fwht_cuda_block(const T * src, float * dst, const int64_t n_rows
 #pragma unroll
         for (int j = 0; j < NE; j++) {
             const float val  = reg[j];
-            const float val2 = __shfl_xor_sync(0xFFFFFFFF, val, h, warp_size);
+            const float val2 = ggml_cuda_shfl_xor(val, h, warp_size);
             reg[j] = (lane & h) == 0 ? val + val2 : val2 - val;
         }
     }
@@ -200,9 +200,12 @@ static bool ggml_cuda_op_fwht_impl(ggml_backend_cuda_context & ctx, const ggml_t
             case 4096:
                 ggml_cuda_kernel_launch(fwht_cuda_block<4096, nt, T>, launch_params_w, src_d, dst_d, rows, scale);
                 return true;
+#if !defined(GGML_USE_MUSA)
+            // 32 KB of shared memory, above the MUSA limit; falls back there
             case 8192:
                 ggml_cuda_kernel_launch(fwht_cuda_block<8192, nt, T>, launch_params_w, src_d, dst_d, rows, scale);
                 return true;
+#endif // !defined(GGML_USE_MUSA)
             default:
                 return false;
         }
