@@ -54,6 +54,8 @@
 
 #define UNUSED GGML_UNUSED
 
+static_assert(GGML_VERSION_MAJOR == 1, "major version update requires attending to all [TAG_GGML_VERSION_MAJOR_UPDATE] tags");
+
 uint64_t ggml_graph_next_uid(void) {
 #ifdef _MSC_VER
 #if defined(_WIN32)
@@ -1114,9 +1116,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 
     "SLEEP",
+
+    "SIGMOID_BACK",
 };
 
-static_assert(GGML_OP_COUNT == 100, "GGML_OP_COUNT != 100");
+static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1229,9 +1233,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 
     "sleep(x)",
+
+    "sigmoid_back(x)",
 };
 
-static_assert(GGML_OP_COUNT == 100, "GGML_OP_COUNT != 100");
+static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -2858,6 +2864,21 @@ struct ggml_tensor * ggml_silu_back(
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
     result->op     = GGML_OP_SILU_BACK;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
+// ggml_sigmoid_back
+
+struct ggml_tensor * ggml_sigmoid_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    result->op     = GGML_OP_SIGMOID_BACK;
     result->src[0] = a;
     result->src[1] = b;
 
@@ -7144,6 +7165,11 @@ static void ggml_compute_backward(
                 case GGML_UNARY_OP_SILU: {
                     if (src0_needs_grads) {
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_silu_back(ctx, grad, src0));
+                    }
+                } break;
+                case GGML_UNARY_OP_SIGMOID: {
+                    if (src0_needs_grads) {
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_sigmoid_back(ctx, grad, src0));
                     }
                 } break;
                 case GGML_UNARY_OP_EXP: {

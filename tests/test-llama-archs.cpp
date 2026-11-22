@@ -247,7 +247,7 @@ struct kv_writer {
     }
 };
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const uint32_t n_layer_min = 0, const bool loop = false) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const uint32_t n_layer_min = 0) {
     gguf_context_ptr ret(gguf_init_empty());
     kv_writer ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -326,11 +326,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_vocab = 3072; // TODO: should be 4096, but user code cannot get `n_vocab_out` yet [TAG_LLAMA_N_VOCAB_OUT]
     } else if (arch == LLM_ARCH_HRM_TEXT) {
         n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
-    } else if (arch == LLM_ARCH_INKLING2) {
+    } else if (arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING2_LOOP) {
         n_embd  = 128;
         n_head  = 4;
         n_ff    = 24;
-        n_layer = loop ? 16 : 3; // loop: 8 layers, the core [2, 6) runs 3 passes
+        n_layer = 3;
     }
 
     uint32_t n_head_kv = n_head;
@@ -496,15 +496,21 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
             arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_BEAM || arch == LLM_ARCH_RICURSIVE) {
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_BEAM || arch == LLM_ARCH_RICURSIVE || arch == LLM_ARCH_DOMYN_EDGE) {
         std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
             pattern.push_back(il % 2);
         }
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
-        if (arch == LLM_ARCH_FLINT) {
+        if (arch == LLM_ARCH_FLINT || arch == LLM_ARCH_DOMYN_EDGE) {
             ms.add_kv(LLM_KV_ATTENTION_ROPE_PATTERN, pattern);
+        }
+        if (arch == LLM_ARCH_DOMYN_EDGE) {
+            // SWA (rope) layers use a smaller head dim than the full-attention (nope) layers
+            ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,   n_embd_head/2);
+            ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_SWA, n_embd_head/2);
+            ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT_SWA, n_embd_head/2);
         }
     } else if (arch == LLM_ARCH_LFM3) {
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>({0, 0, 1}));
@@ -697,7 +703,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_MUDD_TAP_INDICES,            std::vector<int32_t>({-1, -1, -1, -1, 0, 2, 1, 3}));
     }
 
-    if (arch == LLM_ARCH_INKLING2) {
+    if (arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING2_LOOP) {
+        const bool loop = arch == LLM_ARCH_INKLING2_LOOP;
         ms.add_kv(LLM_KV_ATTENTION_RELATIVE_LENGTH,   uint32_t(4));
         ms.add_kv(LLM_KV_ATTENTION_RELATIVE_EXTENT,   uint32_t(16));
         ms.add_kv(LLM_KV_ATTENTION_QK_CLIP,           0.25f);
@@ -705,6 +712,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_FLOOR,   uint32_t(4));
         ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_ALPHA,   0.1f);
         ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(2));
+        if (loop) {
+            // prelude 0, core 1, coda 2; the loader adds slot 3 for the second pass over the core
+            ms.add_kv(LLM_KV_LOOP_START,     uint32_t(1));
+            ms.add_kv(LLM_KV_LOOP_END,       uint32_t(2));
+            ms.add_kv(LLM_KV_LOOP_COUNT,     uint32_t(2));
+            ms.add_kv(LLM_KV_LOOP_GATE_RANK, uint32_t(8));
+            ms.add_kv(LLM_KV_LOOP_VARYING,   false);
+        }
         ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(4));
         ms.add_kv(LLM_KV_VOCAB_SIZE,                  n_vocab + 2);
         ms.add_kv(LLM_KV_VOCAB_SIZE_UNPADDED,         n_vocab);
@@ -716,14 +731,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_EXPERT_USED_COUNT,           uint32_t(2));
         std::vector<bool> pattern(n_layer);
         for (uint32_t i = 0; i < n_layer; ++i) {
-            const uint32_t ip = loop ? (i < 2 ? i : i < 14 ? 2 + (i - 2) % 4 : i - 8) : i;
-            pattern[i] = ip % 2 == 0;
-        }
-        if (loop) {
-            ms.add_kv(LLM_KV_NUM_LOOPS,       uint32_t(3));
-            ms.add_kv(LLM_KV_LOOP_CORE_START, uint32_t(2));
-            ms.add_kv(LLM_KV_LOOP_CORE_END,   uint32_t(6));
-            ms.add_kv(LLM_KV_LOOP_GATE_RANK,  uint32_t(8));
+            pattern[i] = i % 2 == 0;
         }
         std::vector<uint8_t> values(pattern.begin(), pattern.end());
         gguf_set_arr_data(ret.get(), llama_arch_kv_name(arch, LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN).c_str(), GGUF_TYPE_BOOL, values.data(), values.size());
@@ -828,10 +836,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_WKV_HEAD_SIZE,               n_embd/n_head);
     ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(3));
     ms.add_kv(LLM_KV_RESIDUAL_SCALE,              3.5565588200778455f);
-    ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(12));
-    if (loop) {
-        ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,     uint32_t(2));
-    }
+    // the inkling2_loop core boundaries must be multiples of the block size
+    ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(arch == LLM_ARCH_INKLING2_LOOP ? 1 : 12));
     ms.add_kv(LLM_KV_ACTIVATION_SITU_BETA,        4.0f);
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,        -5.0f);
@@ -1149,6 +1155,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_METIS16:
         case LLM_ARCH_ZONOS3:
         case LLM_ARCH_INKLING2:
+        case LLM_ARCH_INKLING2_LOOP:
             return true;
         default:
             return false;
@@ -1265,18 +1272,16 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
             if (moe && !moe_implemented(arch)) {
                 continue;
             }
-            // Inkling 2 has no dense model, its dense slot runs the looped MoE model
-            const bool loop = !moe && arch == LLM_ARCH_INKLING2;
-            if (!moe && !loop && moe_mandatory(arch)) {
+            if (!moe && moe_mandatory(arch)) {
                 continue;
             }
             if (!llama_arch_supports_save(arch) || !arch_supported(arch)) {
                 LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llama_arch_name(arch), moe ? "MoE" : "dense");
                 continue;
             }
-            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe || loop, 0, loop);
+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
             llama_model_ptr model = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
-            const std::string path = dir + "/" + llama_arch_name(arch) + (loop ? "-moe-loop.gguf" : moe ? "-moe.gguf" : "-dense.gguf");
+            const std::string path = dir + "/" + llama_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
             LOG_INF("%s: '%s %s' -> %s ...", __func__, llama_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
             llama_model_save_to_file(model.get(), path.c_str());
             const std::uintmax_t size = std::filesystem::file_size(path);
@@ -1426,13 +1431,11 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
             if (moe && !moe_implemented(arch)) {
                 continue;
             }
-            // Inkling 2 has no dense model, its dense slot runs the looped MoE model
-            const bool loop = !moe && arch == LLM_ARCH_INKLING2;
-            if (!moe && !loop && moe_mandatory(arch)) {
+            if (!moe && moe_mandatory(arch)) {
                 continue;
             }
-            const std::string config_name = loop ? "Loop" : moe ? "MoE" : "Dense";
-            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe || loop, 0, loop);
+            const std::string config_name = moe ? "MoE" : "Dense";
+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
             if (arch == LLM_ARCH_BAILINGMOE3) {
                 GGML_ASSERT(gguf_remove_key(gguf_ctx.get(), "bailingmoe3.kda.safe_gate") >= 0);
             }

@@ -698,10 +698,6 @@ struct llama_layer {
     struct ggml_tensor * attn_q_clip      = nullptr;
     struct ggml_tensor * attn_rel_clip    = nullptr;
     struct ggml_tensor * attn_sink_proj   = nullptr;
-    // inkling2 loop controllers: q, k, v, mlp
-    struct ggml_tensor * loop_down[4]     = {};
-    struct ggml_tensor * loop_gain[4]     = {};
-    struct ggml_tensor * loop_forget[4]   = {};
     struct ggml_tensor * attn_q_inp_norm  = nullptr;
     struct ggml_tensor * attn_k_inp_norm  = nullptr;
     struct ggml_tensor * attn_v_inp_norm  = nullptr;
@@ -741,14 +737,19 @@ struct llama_meta_device_get_split_state_userdata {
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata);
 
 struct llama_prec_policy {
-    // the key is the weight tensor `res->src[0]`, stores the recommended accumulation type of the op (unused for now)
-    // TODO: migrate ad-hoc ggml_prec_set_acc() calls to this container + update apply() to use it
+    // the key is the weight tensor `res->src[0]`, stores the recommended accumulation type of the op
     std::unordered_map<const ggml_tensor *, ggml_prec> prec_acc;
 
     // the key is the weight tensor `res->src[0]`, stores the recommended activation precision type
     std::unordered_map<const ggml_tensor *, ggml_prec> prec_src1;
 
     bool apply(ggml_tensor * res) const;
+
+    void set_acc(const ggml_tensor * w, ggml_prec prec) {
+        if (w) {
+            prec_acc[w] = prec;
+        }
+    }
 
     void load(llama_model_loader & ml, const llama_model & model);
 };
@@ -822,6 +823,11 @@ struct llama_model {
 
     llama_hadamard hdmd;
 
+    // weight -> "<name>.scale" tensor (e.g. NVFP4 scale2), applied by build_lora_mm and build_lora_mm_id
+    std::unordered_map<const ggml_tensor *, ggml_tensor *> w_scales;
+
+    ggml_tensor * get_w_scale(const ggml_tensor * w) const;
+
     // see llama_model_set_attn_rot
     bool attn_rot = true;
 
@@ -841,8 +847,6 @@ struct llama_model {
     struct ggml_tensor * output_norm     = nullptr;
     struct ggml_tensor * output_res_score = nullptr; // kimi-k3: final cross-layer residual mix
     struct ggml_tensor * output_res_query = nullptr; // inkling2: query of the final attention-residual mix
-    struct ggml_tensor * loop_res_query    = nullptr; // inkling2 loop: cross-pass queries (attn, mlp per core layer)
-    struct ggml_tensor * loop_kv_res_query = nullptr; // inkling2 loop: cross-pass queries (k, v per core layer)
     struct ggml_tensor * output_norm_b   = nullptr;
     struct ggml_tensor * output          = nullptr;
     struct ggml_tensor * output_b        = nullptr;
@@ -1058,6 +1062,12 @@ struct llama_model {
 
     llama_memory_i * create_memory(const llama_memory_params & params, const llama_cparams & cparams) const;
 
+    // graph size budget: max graph nodes per model tensor
+    virtual uint32_t graph_nodes_per_tensor() const { return 8; }
+
+    // apply Hadamard transform to the lightning indexer keys
+    virtual bool lid_k_hdmd() const { return false; }
+
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
 
     virtual void load_stats  (llama_model_loader & ml) = 0;
@@ -1069,6 +1079,9 @@ struct llama_model {
     virtual void load_arch_hparams(llama_model_loader & ml) = 0;
     virtual void load_arch_tensors(llama_model_loader & ml) = 0;
     virtual std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const = 0;
+
+    // optional, runs after the scale pass
+    virtual void post_arch_tensors(llama_model_loader &) {}
 
 protected:
     llama_model_params params;
