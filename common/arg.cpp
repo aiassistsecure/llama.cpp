@@ -2940,6 +2940,24 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--ginobili-top-k"}, "N",
+        "ginobili models only: experts active per token (overrides ginobili.expert_used_count)",
+        [](common_params & params, const std::string & value) {
+            if (!string_parse_kv_override(("ginobili.expert_used_count=int:" + value).c_str(), params.kv_overrides)) {
+                throw std::runtime_error(string_format("error: Invalid value for --ginobili-top-k: %s\n", value.c_str()));
+            }
+        }
+    ));
+    add_opt(common_arg(
+        {"--ginobili-full-court"},
+        "ginobili models only: activate all experts per token (full court)",
+        [](common_params & params) {
+            if (!string_parse_kv_override("ginobili.full_court=bool:true", params.kv_overrides)) {
+                throw std::runtime_error("error: could not set ginobili.full_court override\n");
+            }
+        }
+    ));
+    add_opt(common_arg(
         {"--op-offload"},
         {"--no-op-offload"},
         string_format("whether to offload host tensor operations to device (default: %s)", params.no_op_offload ? "false" : "true"),
