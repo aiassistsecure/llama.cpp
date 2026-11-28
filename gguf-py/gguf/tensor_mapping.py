@@ -679,6 +679,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.FFN_GATE_INP: (
             "layers.{bid}.feed_forward.gate",                   # mixtral
+            "model.layers.{bid}.mlp.bank.router",                # ginobili
             "model.layers.{bid}.block_sparse_moe.gate",         # mixtral phimoe
             "model.layers.{bid}.mlp.gate",                      # qwen2moe olmoe
             "transformer.decoder_layer.{bid}.router",           # Grok
@@ -777,6 +778,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.experts.mlp.w1",              # nomic-bert-moe
             "model.layers.{bid}.block_sparse_moe.experts.up", # smallthinker
             "model.layers.{bid}.moe.up_proj",                       # step3.5
+            "model.layers.{bid}.mlp.bank.experts.up_proj",              # ginobili (merged)
         ),
 
         MODEL_TENSOR.FFN_UP_SHEXP: (
@@ -832,6 +834,7 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.experts.gate_proj",        # llama4
             "model.layers.{bid}.block_sparse_moe.experts.gate",         # smallthinker
             "model.layers.{bid}.moe.gate_proj",                         # step3.5
+            "model.layers.{bid}.mlp.bank.experts.gate_proj",            # ginobili (merged)
         ),
 
         MODEL_TENSOR.FFN_GATE_SHEXP: (
@@ -1011,6 +1014,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.experts.mlp.w2",              # nomic-bert-moe
             "model.layers.{bid}.block_sparse_moe.experts.down",     # smallthinker
             "model.layers.{bid}.moe.down_proj",                     # step3.5
+            "model.layers.{bid}.mlp.bank.experts.down_proj",            # ginobili (merged)
             "model.layers.{bid}.experts.down_proj",                 # gemma4
             "layers.{bid}.moe.local_experts.down",                  # metis16
         ),
